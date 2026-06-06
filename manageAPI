@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+
+SETTINGS="$HOME/.claude/settings.json"
+KEYS_FILE="$HOME/.claude/api_keys.txt"
+
+ensure_keys_file() {
+    if [[ ! -f "$KEYS_FILE" ]]; then
+        echo "Error: key file not found at $KEYS_FILE" >&2
+        echo "Add keys first with: manageAPI --add <api_key>" >&2
+        exit 1
+    fi
+}
+
+check_key() {
+    local key="$1"
+    local http_code
+
+    http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X POST "https://cc.freemodel.dev/v1/messages" \
+        -H "x-api-key: $key" \
+        -H "anthropic-version: 2023-06-01" \
+        -H "content-type: application/json" \
+        -d '{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' \
+        --max-time 10)
+
+    # 429 = rate limited; anything else means the key is reachable
+    [[ "$http_code" != "429" ]]
+}
+
+swap_key() {
+    local new_key="$1"
+    local current_key
+
+    if [[ ! -f "$SETTINGS" ]]; then
+        mkdir -p "$(dirname "$SETTINGS")"
+        cat > "$SETTINGS" <<'EOF'
+{
+  "env": {
+    "ANTHROPIC_API_KEY": "YOUR_API_KEY",
+    "ANTHROPIC_BASE_URL": "https://cc.freemodel.dev",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+  },
+  "permissions": {
+    "allow": [],
+    "deny": []
+  },
+  "apiKeyHelper": "echo 'YOUR_API_KEY'"
+}
+EOF
+        echo "Created $SETTINGS with default template."
+    fi
+
+    current_key=$(grep -oP '(?<=ANTHROPIC_API_KEY": ")[^"]+' "$SETTINGS")
+
+    if [[ -z "$current_key" ]]; then
+        echo "Error: could not read current API key from $SETTINGS" >&2
+        exit 1
+    fi
+
+    if [[ "$current_key" == "$new_key" ]]; then
+        echo "Key is already set to $new_key"
+        return
+    fi
+
+    sed -i "s|${current_key}|${new_key}|g" "$SETTINGS"
+    echo "Switched API key to $new_key"
+}
+
+cmd_find() {
+    ensure_keys_file
+
+    local keys=()
+    mapfile -t keys < "$KEYS_FILE"
+
+    local valid=()
+    for key in "${keys[@]}"; do
+        [[ -n "$key" ]] && valid+=("$key")
+    done
+
+    if [[ ${#valid[@]} -eq 0 ]]; then
+        echo "Error: no keys found in $KEYS_FILE" >&2
+        exit 1
+    fi
+
+    echo "Checking ${#valid[@]} key(s)..."
+    for key in "${valid[@]}"; do
+        printf "  Testing %s ... " "$key"
+        if check_key "$key"; then
+            echo "OK"
+            swap_key "$key"
+            exit 0
+        else
+            echo "rate limited"
+        fi
+    done
+
+    echo "All keys are currently rate limited." >&2
+    exit 1
+}
+
+cmd_list() {
+    if [[ ! -f "$KEYS_FILE" ]]; then
+        echo "No key file found at $KEYS_FILE"
+        echo "Add keys with: manageAPI --add <api_key>"
+        exit 0
+    fi
+
+    local keys=()
+    mapfile -t keys < "$KEYS_FILE"
+
+    local current_key
+    current_key=$(grep -oP '(?<=ANTHROPIC_API_KEY": ")[^"]+' "$SETTINGS" 2>/dev/null)
+
+    local count=0
+    for key in "${keys[@]}"; do
+        [[ -z "$key" ]] && continue
+        (( count++ ))
+        if [[ "$key" == "$current_key" ]]; then
+            echo "  $key  (active)"
+        else
+            echo "  $key"
+        fi
+    done
+
+    if [[ $count -eq 0 ]]; then
+        echo "No keys in $KEYS_FILE"
+    fi
+}
+
+cmd_add() {
+    local new_key="$1"
+    if [[ -z "$new_key" ]]; then
+        echo "Error: no API key provided." >&2
+        echo "Usage: manageAPI --add <api_key>" >&2
+        exit 1
+    fi
+
+    # Create the file if it doesn't exist yet
+    if [[ ! -f "$KEYS_FILE" ]]; then
+        touch "$KEYS_FILE" || { echo "Error: could not create $KEYS_FILE" >&2; exit 1; }
+        echo "Created $KEYS_FILE"
+    fi
+
+    if grep -qxF "$new_key" "$KEYS_FILE"; then
+        echo "Key already in list."
+    else
+        echo "$new_key" >> "$KEYS_FILE"
+        echo "Added $new_key to $KEYS_FILE"
+    fi
+}
+
+cmd_help() {
+    cat <<EOF
+Usage: manageAPI [command]
+
+Commands:
+  (no args)            Scan all stored API keys and switch settings.json to the
+                       first one that is not rate limited.
+
+  --add, -ad <key>     Append a new API key to the stored key list.
+                       Creates the key file if it does not exist.
+                       Duplicate keys are ignored.
+
+  --list, -l           List all configured API keys. Marks the currently
+                       active key in settings.json.
+
+  --help, -h           Show this help message.
+
+Files:
+  Key list:  $KEYS_FILE
+  Settings:  $SETTINGS
+EOF
+}
+
+case "${1:-}" in
+    --add|-ad)
+        cmd_add "${2:-}"
+        ;;
+    --list|-l)
+        cmd_list
+        ;;
+    --help|-h)
+        cmd_help
+        ;;
+    "")
+        cmd_find
+        ;;
+    *)
+        echo "Unknown command: $1" >&2
+        echo "Run 'manageAPI --help' for usage." >&2
+        exit 1
+        ;;
+esac
