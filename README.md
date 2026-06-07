@@ -34,14 +34,15 @@ manageAPI
 
 Scans through your stored keys, tests each one, and switches to the first that is not rate limited. If all keys are rate limited it exits with an error.
 
-**Add a new key:**
+**Add one or more keys:**
 ```bash
 manageAPI --add your_api_key_here
+manageAPI --add key_one key_two key_three
 # or
-manageAPI -ad your_api_key_here
+manageAPI -ad key_one key_two key_three
 ```
 
-Appends the key to `~/.claude/api_keys.txt`. Duplicate keys are silently ignored.
+Appends each key to `~/.claude/api_keys.txt`. Duplicate keys are silently ignored.
 
 **See all configured keys:**
 ```bash
