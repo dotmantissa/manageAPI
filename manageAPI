@@ -23,8 +23,8 @@ check_key() {
         -d '{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' \
         --max-time 10)
 
-    # 429 = rate limited; anything else means the key is reachable
-    [[ "$http_code" != "429" ]]
+    # 200 = working; 402 = usage limit reached; 429 = rate limited
+    [[ "$http_code" == "200" ]]
 }
 
 swap_key() {
@@ -128,10 +128,9 @@ cmd_list() {
 }
 
 cmd_add() {
-    local new_key="$1"
-    if [[ -z "$new_key" ]]; then
+    if [[ $# -eq 0 ]]; then
         echo "Error: no API key provided." >&2
-        echo "Usage: manageAPI --add <api_key>" >&2
+        echo "Usage: manageAPI --add <api_key> [api_key2 ...]" >&2
         exit 1
     fi
 
@@ -141,12 +140,14 @@ cmd_add() {
         echo "Created $KEYS_FILE"
     fi
 
-    if grep -qxF "$new_key" "$KEYS_FILE"; then
-        echo "Key already in list."
-    else
-        echo "$new_key" >> "$KEYS_FILE"
-        echo "Added $new_key to $KEYS_FILE"
-    fi
+    for new_key in "$@"; do
+        if grep -qxF "$new_key" "$KEYS_FILE"; then
+            echo "Key already in list: $new_key"
+        else
+            echo "$new_key" >> "$KEYS_FILE"
+            echo "Added $new_key"
+        fi
+    done
 }
 
 cmd_help() {
@@ -157,7 +158,8 @@ Commands:
   (no args)            Scan all stored API keys and switch settings.json to the
                        first one that is not rate limited.
 
-  --add, -ad <key>     Append a new API key to the stored key list.
+  --add, -ad <key> [key2 ...]
+                   Append one or more API keys to the stored key list.
                        Creates the key file if it does not exist.
                        Duplicate keys are ignored.
 
@@ -174,7 +176,8 @@ EOF
 
 case "${1:-}" in
     --add|-ad)
-        cmd_add "${2:-}"
+        shift
+        cmd_add "$@"
         ;;
     --list|-l)
         cmd_list
